@@ -1,2 +1,2 @@
-module github.com/AntonKuzinV/logger/v.2.0.0
+module github.com/AntonKuzinV/logger/v2
 go 1.16
