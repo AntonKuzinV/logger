@@ -36,12 +36,6 @@ func New(out io.Writer, flag int) *Logger {
 	return &Logger{out: out, flag: flag}
 }
 
-func (l *Logger) SetOutput(w io.Writer) {
-	l.mutex.Lock()
-	defer l.mutex.Unlock()
-	l.out = w
-}
-
 func itoa(buffer *[]byte, i int, wid int) {
 	var b [20]byte
 	bp := len(b) - 1
