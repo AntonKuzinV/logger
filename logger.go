@@ -22,6 +22,7 @@ const (
 	WarningColor string = "\x1b[33m"
 	ErrorColor string = "\x1b[35m"
 	FatalColor string = "\x1b[31;1m"
+	BasicColor string = "\x1b[0m"
 )
 
 type Logger struct {
@@ -130,6 +131,7 @@ func (l *Logger) Output(level string, call int, s string) error {
 func (l *Logger) Info(msg ...interface{}) {
 	fmt.Print(InfoColor)
 	l.Output("INFO ", 2, fmt.Sprint(msg...))
+	fmt.Print(BasicColor)
 }
 
 func (l *Logger) Infof(format string, msg ...interface{}) {
@@ -139,6 +141,7 @@ func (l *Logger) Infof(format string, msg ...interface{}) {
 func (l *Logger) Error(msg ...interface{}) {
 	fmt.Print(ErrorColor)
 	l.Output("ERROR ", 2, fmt.Sprint(msg...))
+	fmt.Print(BasicColor)
 }
 
 func (l *Logger) Errorf(format string, msg ...interface{}) {
@@ -148,6 +151,7 @@ func (l *Logger) Errorf(format string, msg ...interface{}) {
 func (l *Logger) Warning(msg ...interface{}) {
 	fmt.Print(WarningColor)
 	l.Output("WARNING ", 2, fmt.Sprint(msg...))
+	fmt.Print(BasicColor)
 }
 
 func (l *Logger) Warningf(format string, msg ...interface{}) {
@@ -157,6 +161,7 @@ func (l *Logger) Warningf(format string, msg ...interface{}) {
 func (l *Logger) Fatal(msg ...interface{}) {
 	fmt.Print(FatalColor)
 	l.Output("FATAL ", 2, fmt.Sprint(msg...))
+	fmt.Print(BasicColor)
 }
 
 func (l *Logger) Fatalf(format string, msg ...interface{}) {
