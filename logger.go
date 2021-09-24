@@ -3,167 +3,173 @@ package logger
 import (
 	"fmt"
 	"io"
+	"os"
+	"path"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 )
 
 const (
-	Ldate         = 1 << iota
-	Ltime
-	Lmicroseconds
-	Llongfile
-	Lshortfile
-	Lmsgprefix
+	timeFormat = "2006/01/02 15:04:05"
+
+	boldRed string = "\x1b[31;1m"
+	magenta string = "\x1b[35m"
+	yellow  string = "\x1b[33m"
+	green   string = "\x1b[32m"
+	blue    string = "\x1b[34m"
+	dim     string = "\x1b[2m"
+	normal  string = "\x1b[0m"
 )
+
+// region Supplementary definitions
+
+type Severity int
 
 const (
-	InfoColor string = "\x1b[32m"
-	WarningColor string = "\x1b[33m"
-	ErrorColor string = "\x1b[35m"
-	FatalColor string = "\x1b[31;1m"
-	BasicColor string = "\x1b[0m"
+	DEBUG Severity = iota
+	INFO
+	WARNING
+	ERROR
+	FATAL
 )
 
+func (l Severity) String() string {
+	return [...]string{
+		"[DEBUG]  ",
+		"[INFO]   ",
+		"[WARNING]",
+		"[ERROR]  ",
+		"[FATAL]  ",
+	}[l]
+}
+
+type LoggerOutput struct {
+	Writer   io.Writer
+	Mutex    sync.Mutex
+	LogLevel Severity
+}
+
+func (lo *LoggerOutput) SyncedPrint(line string) {
+	lo.Mutex.Lock()
+	lo.Writer.Write([]byte(line))
+	lo.Mutex.Unlock()
+}
+
+type LoggerParams struct {
+	ConsoleOutputStream io.Writer
+	ConsoleLogLevel     Severity
+	LogFileName         string
+	FileLogLevel        Severity
+}
+
 type Logger struct {
-	mutex sync.Mutex
-	out io.Writer
-	logLevel string
-	flag int
-	buffer []byte
+	ConsoleOutput *LoggerOutput
+	FileOutput    *LoggerOutput
 }
 
-func New(out io.Writer, flag int) *Logger {
-	return &Logger{out: out, flag: flag}
+func NewLogger(params LoggerParams) (*Logger, error) {
+	var consoleOutput *LoggerOutput = nil
+	if params.ConsoleOutputStream != nil {
+		consoleOutput = new(LoggerOutput)
+		consoleOutput.LogLevel = params.ConsoleLogLevel
+		consoleOutput.Mutex = sync.Mutex{}
+		consoleOutput.Writer = params.ConsoleOutputStream
+	}
+
+	var fileOutput *LoggerOutput = nil
+	if params.LogFileName != "" {
+		fileOutput = new(LoggerOutput)
+		fileOutput.LogLevel = params.FileLogLevel
+		fileOutput.Mutex = sync.Mutex{}
+
+		var err error
+		fileOutput.Writer, err = os.OpenFile(params.LogFileName, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0640)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return &Logger{
+		consoleOutput, fileOutput,
+	}, nil
 }
 
-func itoa(buffer *[]byte, i int, wid int) {
-	var b [20]byte
-	bp := len(b) - 1
-	for i >= 10 || wid > 1 {
-		wid--
-		q := i / 10
-		b[bp] = byte('0' + i - q*10)
-		bp--
-		i = q
+func (l *Logger) getExecutionLocation() (fileName string, funcName string, line int) {
+	pc, fileName, line, ok := runtime.Caller(3)
+	fileName = path.Base(fileName)
+
+	if !ok {
+		fileName = "?"
+		line = 0
 	}
-	// i < 10
-	b[bp] = byte('0' + i)
-	*buffer = append(*buffer, b[bp:]...)
+
+	fn := runtime.FuncForPC(pc)
+	if fn == nil {
+		funcName = "?()"
+	} else {
+		dotName := filepath.Ext(fn.Name())
+		funcName = strings.TrimLeft(dotName, ".") + "()"
+	}
+
+	return
 }
 
-func (l *Logger) format(buffer *[]byte, time time.Time, file string, line int) {
-	if l.flag&Lmsgprefix == 0 {
-		*buffer = append(*buffer, l.logLevel...)
+func (l *Logger) output(severity Severity, msg string, color string) {
+	fileName, funcName, line := l.getExecutionLocation()
+	now := time.Now().Format(timeFormat)
+
+	if l.ConsoleOutput != nil && severity >= l.ConsoleOutput.LogLevel {
+		var consoleLine string = fmt.Sprintf("%s%s%s %s%s%s %s:%d %s: %s\n",
+			color, severity.String(), normal, dim, now, normal, fileName, line, funcName, msg)
+
+		l.ConsoleOutput.SyncedPrint(consoleLine)
 	}
-	if l.flag&(Ldate|Ltime|Lmicroseconds) != 0 {
-		if l.flag&Ldate != 0 {
-			year, month, day := time.Date()
-			itoa(buffer, year, 4)
-			*buffer = append(*buffer, '/')
-			itoa(buffer, int(month), 2)
-			*buffer = append(*buffer, '/')
-			itoa(buffer, day, 2)
-			*buffer = append(*buffer, ' ')
-		}
-		if l.flag&(Ltime|Lmicroseconds) != 0 {
-			hour, min, sec := time.Clock()
-			itoa(buffer, hour, 2)
-			*buffer = append(*buffer, ':')
-			itoa(buffer, min, 2)
-			*buffer = append(*buffer, ':')
-			itoa(buffer, sec, 2)
-			if l.flag&Lmicroseconds != 0 {
-				*buffer = append(*buffer, '.')
-				itoa(buffer, time.Nanosecond()/1e3, 6)
-			}
-			*buffer = append(*buffer, ' ')
-		}
-	}
-	if l.flag&(Lshortfile|Llongfile) != 0 {
-		if l.flag&Lshortfile != 0 {
-			short := file
-			for i := len(file) - 1; i > 0; i-- {
-				if file[i] == '/' {
-					short = file[i+1:]
-					break
-				}
-			}
-			file = short
-		}
-		*buffer = append(*buffer, file...)
-		*buffer = append(*buffer, ':')
-		itoa(buffer, line, -1)
-		*buffer = append(*buffer, ": "...)
-	}
-	if l.flag&Lmsgprefix != 0 {
-		*buffer = append(*buffer, l.logLevel...)
+
+	if l.FileOutput != nil && severity >= l.FileOutput.LogLevel {
+		var fileLine string = fmt.Sprintf("%s %s %s:%d %s: %s\n",
+			severity.String(), now, fileName, line, funcName, msg)
+
+		l.FileOutput.SyncedPrint(fileLine)
 	}
 }
 
-func (l *Logger) Output(level string, call int, s string) error {
-	l.logLevel = level
-	now := time.Now()
-	var file string
-	var line int
-	l.mutex.Lock()
-	defer l.mutex.Unlock()
-	if l.flag&(Lshortfile|Llongfile) != 0 {
-		l.mutex.Unlock()
-		var ok bool
-		_, file, line, ok = runtime.Caller(call)
-		if !ok {
-			file = "???"
-			line = 0
-		}
-		l.mutex.Lock()
-	}
-	l.buffer = l.buffer[:0]
-	l.format(&l.buffer, now, file, line)
-	l.buffer = append(l.buffer, s...)
-	if len(s) == 0 || s[len(s)-1] != '\n' {
-		l.buffer = append(l.buffer, '\n')
-	}
-	_, err := l.out.Write(l.buffer)
-	return err
+// region Convenience log function shortcuts
+
+func (l *Logger) Debug(msg ...interface{}) {
+	l.output(DEBUG, fmt.Sprint(msg...), blue)
+}
+func (l *Logger) Debugf(format string, msg ...interface{}) {
+	l.output(DEBUG, fmt.Sprintf(format, msg...), blue)
 }
 
 func (l *Logger) Info(msg ...interface{}) {
-	fmt.Print(InfoColor)
-	l.Output("INFO ", 2, fmt.Sprint(msg...))
-	fmt.Print(BasicColor)
+	l.output(INFO, fmt.Sprint(msg...), green)
 }
-
 func (l *Logger) Infof(format string, msg ...interface{}) {
-	l.Output("INFO ",2, fmt.Sprintf(format, msg...))
+	l.output(INFO, fmt.Sprintf(format, msg...), green)
 }
 
 func (l *Logger) Error(msg ...interface{}) {
-	fmt.Print(ErrorColor)
-	l.Output("ERROR ", 2, fmt.Sprint(msg...))
-	fmt.Print(BasicColor)
+	l.output(ERROR, fmt.Sprint(msg...), magenta)
 }
-
 func (l *Logger) Errorf(format string, msg ...interface{}) {
-	l.Output("ERROR ", 2, fmt.Sprintf(format, msg...))
+	l.output(ERROR, fmt.Sprintf(format, msg...), magenta)
 }
 
 func (l *Logger) Warning(msg ...interface{}) {
-	fmt.Print(WarningColor)
-	l.Output("WARNING ", 2, fmt.Sprint(msg...))
-	fmt.Print(BasicColor)
+	l.output(WARNING, fmt.Sprint(msg...), yellow)
 }
-
 func (l *Logger) Warningf(format string, msg ...interface{}) {
-	l.Output("WARNING ",2, fmt.Sprintf(format, msg...))
+	l.output(WARNING, fmt.Sprintf(format, msg...), yellow)
 }
 
 func (l *Logger) Fatal(msg ...interface{}) {
-	fmt.Print(FatalColor)
-	l.Output("FATAL ", 2, fmt.Sprint(msg...))
-	fmt.Print(BasicColor)
+	l.output(FATAL, fmt.Sprint(msg...), boldRed)
 }
 
 func (l *Logger) Fatalf(format string, msg ...interface{}) {
-	l.Output("FATAL ", 2, fmt.Sprintf(format, msg...))
+	l.output(FATAL, fmt.Sprintf(format, msg...), boldRed)
 }
